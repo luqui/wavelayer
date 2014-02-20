@@ -99,7 +99,7 @@ parallel scale = zipWith (\a b -> [a,b]) scale (drop 2 (scale ++ map (2*) scale)
 
 harmscale :: WS.T W [[Rational]]
 harmscale = do
-    mapM (withHarmonies (1/4) (1/2)) (parallel majorScale)
+    mapM (iterM 2 (withHarmonies (1/2) 1)) (parallel majorScale)
 
 
 main = Cs.dac . playChords . head . WS.toList $ harmscale
