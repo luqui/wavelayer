@@ -19,84 +19,19 @@ nub = go Set.empty
     go s (x:xs) | x `Set.member` s = go s xs
                 | otherwise = x : go (Set.insert x s) xs
 
-choice :: (Alternative f) => [f a] -> f a
-choice = foldr (<|>) empty
-
-oneOf :: (Alternative f) => [a] -> f a
-oneOf = choice . map pure
-
 wChoice :: (Num n, WS.Weight n) => [WS.T n a] -> WS.T n a
 wChoice [] = empty
 wChoice (x:xs) = x <|> WS.weight 1 (wChoice xs)
 
-minimaOn :: (Ord b) => (a -> b) -> [a] -> [a]
-minimaOn measure [] = []
-minimaOn measure (x:xs) = go [] (measure x) xs
-    where
-    go ms mf [] = ms
-    go ms mf (x:xs) =
-        case compare fx mf of
-            LT -> go [x] fx xs
-            EQ -> go (x:ms) mf xs
-            GT -> go ms mf xs
-        where
-        fx = measure x
-
 lcms :: (Integral a) => [a] -> a
 lcms = foldr lcm 1
-
-iter :: Integer -> (a -> a) -> (a -> a)
-iter 0 f = id
-iter n f = f . iter (n-1) f
 
 iterM :: (Monad m) => Integer -> (a -> m a) -> (a -> m a)
 iterM 0 _ x = return x
 iterM n f x = f =<< iterM (n-1) f x
 
-inRange :: (Ord a) => a -> a -> a -> Bool
-inRange lo hi x = lo <= x && x <= hi
-
 
 type W = Integer
-
--- chordRoot [5/4,3/2]
--- 5/4 = m*r
--- 3/2 = n*r
---
--- suppose r = a/b.  multiply by b
---
--- 5/4*b = m*a
--- 3/2*b = n*a
--- 5*b = 4*m*a
--- 3*b = 2*n*a
---
---
--- 5 = 4*m*r
--- 3 = 2*n*r
---
--- 
-
--- input is ascending
-chordRoot :: [Rational] -> WS.T W Rational
-chordRoot [] = empty
-chordRoot (r1:rs) = do
-    posn' <- wChoice [ pure (posn % n)  | n <- [1..] ]
-    return $ r1 / posn'
-    where
-    ratios = map (/r1) rs
-    posn = lcms (map denominator ratios)
-
-harmonize :: [Rational] -> WS.T W Rational
-harmonize rs = do
-    root <- chordRoot rs
-    harm <- wChoice [ pure (n*root) | n <- [1..] ] 
-    guard (harm `notElem` rs)
-    return $ harm
-
--- The chord roots proceed as r1/(posn/n) = (r1/posn)*n.  
--- The harmonics proceed as m*root.
--- n and m are both arbitrary, so we're really redoing work here.
--- We should just find the appropriate i for (r1/posn)*i.
 
 harmonizeRange :: Rational -> Rational -> [Rational] -> WS.T W Rational
 harmonizeRange lo hi [] = empty
