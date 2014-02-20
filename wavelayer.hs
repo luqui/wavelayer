@@ -19,6 +19,9 @@ nub = go Set.empty
     go s (x:xs) | x `Set.member` s = go s xs
                 | otherwise = x : go (Set.insert x s) xs
 
+choice :: (Alternative f) => [f a] -> f a
+choice = foldr (<|>) empty
+
 wChoice :: (Num n, WS.Weight n) => [WS.T n a] -> WS.T n a
 wChoice [] = empty
 wChoice (x:xs) = x <|> WS.weight 1 (wChoice xs)
@@ -36,12 +39,17 @@ type W = Integer
 harmonizeRange :: Rational -> Rational -> [Rational] -> WS.T W Rational
 harmonizeRange lo hi [] = empty
 harmonizeRange lo hi rs@(r1:rs') = 
-    wChoice . map pure . nub . catMaybes . map range . takeWhile (<= hi) $ [ s*n | n <- [1..] ]
+    wChoice $ do
+        s' <- [s/n | n <- [1..]]
+        return . choice . map pure . nub . catMaybes . map range . takeWhile (<= hi) $ [ s'*n | n <- [1..] ]
     where
     ratios = map (/r1) rs'
     posn = fromIntegral (lcms (map denominator ratios))
     s = r1/posn
-    range = listToMaybe . filter (`notElem` rs) . takeWhile (<= hi) . dropWhile (<= lo) . iterate (2*)
+    range = listToMaybe . filter (`notElem` rs) . 
+        (takeWhile (<= hi) . dropWhile (<= lo) . iterate (*2)) 
+    -- iterate (*2) advances earlier harmonics to higher frequencies, to pick "simpler"
+    -- harmonics first.
 
 withHarmonies :: Rational -> Rational -> [Rational] -> WS.T W [Rational]
 withHarmonies lo hi rs = do
@@ -67,7 +75,7 @@ chord rs = sum [ amp * Cs.osc (440*realToFrac f) | f <- rs ]
 playChord :: D8 -> Cs.Sig
 playChord (a,b,c,d,e,f,g,h) = amp*o a + amp*o b + amp*o c + amp*o d + amp*o e + amp*o f + amp*o g + amp*o h
     where
-    amp = 1/8
+    amp = 1/16
     o x = Cs.osc (Cs.sig (440*x))
 
 playChords :: [[Rational]] -> Cs.Sig
@@ -92,5 +100,6 @@ parallel scale = zipWith (\a b -> [a,b]) scale (drop 2 (scale ++ map (2*) scale)
 harmscale :: WS.T W [[Rational]]
 harmscale = do
     mapM (withHarmonies (1/4) (1/2)) (parallel majorScale)
+
 
 main = Cs.dac . playChords . head . WS.toList $ harmscale
