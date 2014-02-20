@@ -35,13 +35,13 @@ type W = Integer
 
 harmonizeRange :: Rational -> Rational -> [Rational] -> WS.T W Rational
 harmonizeRange lo hi [] = empty
-harmonizeRange lo hi (r1:rs) = 
+harmonizeRange lo hi rs@(r1:rs') = 
     wChoice . map pure . nub . catMaybes . map range . takeWhile (<= hi) $ [ s*n | n <- [1..] ]
     where
-    ratios = map (/r1) rs
+    ratios = map (/r1) rs'
     posn = fromIntegral (lcms (map denominator ratios))
     s = r1/posn
-    range = listToMaybe . takeWhile (<= hi) . dropWhile (<= lo) . iterate (2*)
+    range = listToMaybe . filter (`notElem` rs) . takeWhile (<= hi) . dropWhile (<= lo) . iterate (2*)
 
 withHarmonies :: Rational -> Rational -> [Rational] -> WS.T W [Rational]
 withHarmonies lo hi rs = do
@@ -91,5 +91,6 @@ parallel scale = zipWith (\a b -> [a,b]) scale (drop 2 (scale ++ map (2*) scale)
 
 harmscale :: WS.T W [[Rational]]
 harmscale = do
-    mapM (withHarmonies (1/2) 1) (parallel minorScale)
+    mapM (withHarmonies (1/4) (1/2)) (parallel majorScale)
 
+main = Cs.dac . playChords . head . WS.toList $ harmscale
