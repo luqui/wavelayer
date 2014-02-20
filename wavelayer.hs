@@ -1,5 +1,8 @@
+{-# LANGUAGE NoMonomorphismRestriction #-}
+
 import Data.Ratio
 import qualified Csound.Base as Cs
+import Csound.Control.Evt as Cs
 import qualified Data.Set as Set
 import qualified Control.Monad.WeightedSearch as WS
 import Control.Applicative
@@ -38,74 +41,62 @@ minimaOn measure (x:xs) = go [] (measure x) xs
         where
         fx = measure x
 
-
-type W = Integer
-type Interval = Rational
-
--- normalizes an interval into the octave [1,2)
-normalizeInterval :: Interval -> Interval
-normalizeInterval i
-    | i < 0 = normalizeInterval (negate i)
-    | i < 1 = normalizeInterval (2*i)
-    | i >= 2 = normalizeInterval (i/2)
-    | otherwise = i
-
-
-harmonicOctaveIntervals :: Integer -> [(Rational,Interval)]
-harmonicOctaveIntervals octave = [ (a%(2^octave), b%a)
-                                 | a <- [2^octave..2*2^octave], b <- [a..2*2^octave] ] 
-
--- gives base note, interval, and octave
-harmonicOctaves :: WS.T W [(Integer,Rational,Interval)]
-harmonicOctaves = wChoice [ return (map (\(root,i) -> (octave,root,i)) (harmonicOctaveIntervals octave)) 
-                          | octave <- [0..] ] 
-
-intervals :: WS.T W Interval
-intervals = do
-    oct <- harmonicOctaves
-    oneOf [ i | (_,_,i) <- oct ]
-
-harmonics :: WS.T W [Interval]
-harmonics = 
-    wChoice [ return [ a%(2^octave) | a <- [2^octave..2*2^octave-1] ] | octave <- [0..] ]
-
-subset :: (Ord a) => [a] -> [a] -> Bool
-subset xs ys = Set.fromList xs `Set.isSubsetOf` Set.fromList ys
-
--- takes a list of ascending notes and finds their rank and root
-harmonicRoot :: [Rational] -> WS.T W (Integer,Rational)
-harmonicRoot [] = empty
-harmonicRoot [x] = pure (0,x)  -- or maybe empty?
-harmonicRoot notes = do
-    oct <- harmonicOctaves
-    let octIntervals = Set.fromList $ map (\(_,_,i) -> i) oct
-    guard (intervals `Set.isSubsetOf` octIntervals)
-    oneOf $ nub [ (o,n1/root) | (o,root,i) <- oct, i == n2/n1 ]
-    where
-    intervals = Set.fromList [ normalizeInterval (b/a) | (a:as) <- tails notes, b <- as ]
-    (n1:n2:_) = notes
-
-harmonicRoot' :: [Rational] -> WS.T W Rational
-harmonicRoot' rs = do
-    h <- harmonics
-    oneOf [ r | r <- rs, rs `subset` map (normalizeInterval . (r*)) h ]
-    
-
-harmonize :: [Rational] -> WS.T W Rational
-harmonize rs = do
-    root <- harmonicRoot' rs
-    n <- (root*) <$> join (oneOf <$> harmonics)
-    guard (n `notElem` rs)
-    return n
-    
-
-harmonize1 :: [Rational] -> [Rational]
-harmonize1 rs = sort $ head (WS.toList (harmonize rs)) : rs
+lcms :: (Integral a) => [a] -> a
+lcms = foldr lcm 1
 
 iter :: Integer -> (a -> a) -> (a -> a)
 iter 0 f = id
 iter n f = f . iter (n-1) f
 
+iterM :: (Monad m) => Integer -> (a -> m a) -> (a -> m a)
+iterM 0 _ x = return x
+iterM n f x = f =<< iterM (n-1) f x
+
+inRange :: (Ord a) => a -> a -> a -> Bool
+inRange lo hi x = lo <= x && x <= hi
+
+
+type W = Integer
+
+
+-- input is ascending
+chordRoot :: [Rational] -> WS.T W Rational
+chordRoot [] = empty
+chordRoot (r1:rs) = do
+    posn' <- wChoice [ pure n | n <- [1..] ]
+    return $ r1 / posn'
+    where
+    ratios = map (/r1) rs
+    posn = lcms (map denominator ratios)
+
+harmonize :: [Rational] -> WS.T W Rational
+harmonize rs = do
+    root <- chordRoot rs
+    harm <- wChoice [ pure (n*root) | n <- [1..] ]
+    guard (harm `notElem` rs)
+    return $ harm
+
+
+type D = Cs.D
+type D8 = (D,D,D,D,D,D,D,D)
+
+chordSig :: [Rational] -> D8
+chordSig rs = (el 0, el 1, el 2, el 3, el 4, el 5, el 6, el 7)
+    where
+    el n | n < len = realToFrac (rs !! n)
+         | otherwise = 0
+    len = length rs
+
+chord :: [Rational] -> Cs.Sig
 chord rs = sum [ amp * Cs.osc (440*realToFrac f) | f <- rs ]
     where
     amp = 0.25 / fromIntegral (length rs)
+
+playChord :: D8 -> Cs.Sig
+playChord (a,b,c,d,e,f,g,h) = amp*o a + amp*o b + amp*o c + amp*o d + amp*o e + amp*o f + amp*o g + amp*o h
+    where
+    amp = 1/8
+    o x = Cs.osc (Cs.sig (440*x))
+
+playChords :: [[Rational]] -> Cs.Sig
+playChords rs = Cs.sched (return . playChord) (Cs.withDur 1 (Cs.cycleE (map chordSig rs) (Cs.metroE 1)))
