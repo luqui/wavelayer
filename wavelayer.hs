@@ -1,7 +1,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 
 import Data.Ratio
-import qualified Csound.Base as Cs
+import qualified Csound as Cs
 import Csound.Control.Evt as Cs
 import qualified Data.Set as Set
 import qualified Control.Monad.WeightedSearch as WS
@@ -69,28 +69,19 @@ withHarmonies lo hi rs = do
 
 
 type D = Cs.D
-type D8 = (D,D,D,D,D,D,D,D)
-
-chordSig :: [Rational] -> D8
-chordSig rs = (el 0, el 1, el 2, el 3, el 4, el 5, el 6, el 7)
-    where
-    el n | n < len = realToFrac (rs !! n)
-         | otherwise = 0
-    len = length rs
 
 chord :: [Rational] -> Cs.Sig
 chord rs = sum [ amp * Cs.osc (440*realToFrac f) | f <- rs ]
     where
     amp = 0.25 / fromIntegral (length rs)
 
-playChord :: D8 -> Cs.Sig
-playChord (a,b,c,d,e,f,g,h) = o a + o b + o c + o d + o e + o f + o g + o h
-    where
-    amp = 1/32
-    o x = amp * Cs.linseg [0, 0.01, 1, 0.98, 0.5, 0.01, 0] * Cs.osc (Cs.sig (440*x))
+playNote :: D -> Cs.Sig
+playNote n = env * Cs.osc (Cs.sig (440*n))
+  where
+  env = Cs.linseg [1, 3, 0] * Cs.linseg [1, Cs.idur-0.06, 1, 0.05, 0]
 
 playChords :: [[Rational]] -> Cs.Sig
-playChords rs = Cs.sched (return . playChord) (Cs.withDur 1 (Cs.cycleE (map chordSig rs) (Cs.metroE 1)))
+playChords = (/8) . Cs.mix . Cs.sco (return . playNote) . fmap realToFrac . scoreChords
 
 
 majorScale :: [Rational]
@@ -119,5 +110,8 @@ harmonizeN n lo hi = head . WS.toList . iterM n (withHarmonies lo hi)
 chords :: [[Rational]]
 chords = take 200 . nub . map (delete 2) . WS.toList $ iterM 4 (withHarmonies (1/2) 2) [2]
 
-main = Cs.dac . playChords  $ chords
+scoreChords :: [[Rational]] -> Cs.Score Rational
+scoreChords = Cs.mel . map Cs.har . (map.map) Cs.temp
+
+main = Cs.dac . playChords $ chords
 
