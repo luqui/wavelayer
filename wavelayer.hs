@@ -6,7 +6,7 @@ import Csound.Control.Evt as Cs
 import qualified Data.Set as Set
 import qualified Control.Monad.WeightedSearch as WS
 import Control.Applicative
-import Data.List (tails, sort)
+import Data.List (tails, sort, delete)
 import Control.Monad (guard, join)
 import Control.Arrow (second)
 import Data.Maybe (listToMaybe, catMaybes)
@@ -54,18 +54,13 @@ type W = Integer
 
 harmonizeRange :: Rational -> Rational -> [Rational] -> WS.T W Rational
 harmonizeRange lo hi [] = empty
-harmonizeRange lo hi rs@(r1:rs') = 
-    wChoice . fmap choice' . concatNub $ do
-        s' <- [s/n | n <- [1..]]
-        return . catMaybes . map range . takeWhile (<= hi) $ [ s'*n | n <- [1..] ]
+harmonizeRange lo hi rs@(r1:rs') = do
+    s' <- wChoice' [s/n | n <- [1..]]
+    wChoice' . filter (`notElem` rs) . takeWhile (<= hi) . dropWhile (<= lo) $ [ s'*n | n <- [1..] ]
     where
     ratios = map (/r1) rs'
     posn = fromIntegral (lcms (map denominator ratios))
     s = r1/posn
-    range = listToMaybe . filter (`notElem` rs) . 
-            takeWhile (<= hi) . dropWhile (<= lo) . iterate (*2)
-    -- iterate (*2) advances earlier harmonics to higher frequencies, to pick "simpler"
-    -- harmonics first.
 
 withHarmonies :: Rational -> Rational -> [Rational] -> WS.T W [Rational]
 withHarmonies lo hi rs = do
@@ -114,7 +109,13 @@ parallel :: [Rational] -> [[Rational]]
 parallel scale = zipWith (\a b -> [a,b]) scale (drop 2 (scale ++ map (2*) scale))
 
 harmscale :: [[Rational]]
-harmscale = map (head . WS.toList . iterM 4 (withHarmonies (1/2) 2)) (parallel minorScale)
+harmscale = map (harmonizeN 4 (1/2) 2) (parallel minorScale)
 
+harmonizeN :: Integer -> Rational -> Rational -> [Rational] -> [Rational]
+harmonizeN n lo hi = head . WS.toList . iterM n (withHarmonies lo hi)
 
-main = Cs.dac . playChords  $ harmscale
+chords :: [[Rational]]
+chords = take 200 . nub . map (delete 2) . WS.toList $ iterM 4 (withHarmonies (1/2) 2) [2]
+
+main = Cs.dac . playChords  $ chords
+
