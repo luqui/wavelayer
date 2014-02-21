@@ -114,6 +114,8 @@ harmscale = map (harmonizeN 4 (1/2) 2) (parallel minorScale)
 harmonizeN :: Integer -> Rational -> Rational -> [Rational] -> [Rational]
 harmonizeN n lo hi = head . WS.toList . iterM n (withHarmonies lo hi)
 
+-- This picks 4-part, 2-octave harmonies pivoting around A880, in increasing order of 
+-- complexity (as defined by harmonizeRange).
 chords :: [[Rational]]
 chords = take 200 . nub . map (delete 2) . WS.toList $ iterM 4 (withHarmonies (1/2) 2) [2]
 
