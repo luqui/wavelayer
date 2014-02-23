@@ -37,6 +37,7 @@ chopHeapN n (Weight w h) = Weight w (chopHeapN n h)
 
 newtype Heap' w a = Heap' { getHeap' :: forall r. (a -> Heap w r) -> Heap w r }
 
+-- these don't work because CPS
 chop :: (ZeroWeight w) => w -> Heap' w a -> Heap' w a
 chop w h = Heap' $ \r -> chopHeap w (getHeap' h r)
 
@@ -54,6 +55,8 @@ instance Applicative (Heap' w) where
     pure = return
     (<*>) = ap
 
+-- This monadplus instance suffers from the foldr merge problem
+-- We can do better by using a tree-merge of some sort.
 instance (Weight w) => MonadPlus (Heap' w) where
     mzero = Heap' $ const Fail
     m `mplus` n = Heap' $ \r -> getHeap' m r `mplus` getHeap' n r
