@@ -90,8 +90,13 @@ playNote n = env * Cs.osc (Cs.sig n)
   where
   env = Cs.linseg [1, 3, 0] * Cs.linseg [1, Cs.idur-0.06, 1, 0.05, 0]
 
+
+
 playChords :: [[Rational]] -> Cs.Sig
 playChords = (/8) . Cs.mix . Cs.sco (return . playNote) . fmap realToFrac . scoreChords
+  where
+  scoreChords :: [[Rational]] -> Cs.Score Rational
+  scoreChords = Cs.mel . map Cs.har . (map.map) Cs.temp
 
 
 majorScale :: [Rational]
@@ -141,13 +146,35 @@ harmonizeIntoLine rs = do
 myLine = map (:[]) . map (*440) $ [1, 9/8, 4/3, 5/4, 5/4, 1, 9/8, 3/2, 8/5, 4/3, 3/2, 2, 15/8, 3/2, 4/3, 4/3, 5/4]
 
 
--- This picks 4-part, 2-octave harmonies pivoting around A880, in increasing order of 
--- complexity (as defined by harmonizeRange).
-chords :: [[Rational]]
-chords = take 200 . nub . map (delete 2) . WS.flattenHeap $ iterM 4 (withHarmonies (1/2) 2) [2]
+weight' :: W -> WS.T W ()
+weight' w = WS.weight w (return ())
 
-scoreChords :: [[Rational]] -> Cs.Score Rational
-scoreChords = Cs.mel . map Cs.har . (map.map) Cs.temp
+continueHarmony :: [Rational] -> Rational -> WS.T W Rational
+continueHarmony chord lastNote = do
+  newNote <- harmonizeRange (minimum chord) (maximum chord) chord
+  weight' . abs . log . realToFrac $ newNote / lastNote
+  return newNote
+
+addHarmony :: [[Rational]] -> WS.T W [[Rational]]
+addHarmony [] = return []
+addHarmony (chord:chords) = do
+  n <- harmonizeRange (minimum chord) (maximum chord) chord
+  ((n:chord):) <$> go n chords
+  where
+  go lastNote [] = return []
+  go lastNote (chord:chords) = do
+    n <- continueHarmony chord lastNote
+    ((n:chord):) <$> go n chords
+
+runWS :: WS.T W a -> a
+runWS = head . WS.toList
+
+chords :: [[Rational]]
+chords = runWS . iterM 2 addHarmony $ boundary
+  where
+  boundary = zipWith (\a b -> [a,b]) melody (map (/2) melody)
+  melody = [1, 3/2, 5/4, 4/3, 5/4, 2, 3/2, 5/4, 1]
+
 
 --main = Cs.dac . playChords . (map.map) (*440) $ chords
 
