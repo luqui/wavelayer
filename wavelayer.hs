@@ -77,6 +77,19 @@ withHarmonies lo hi rs = do
     r <- harmonizeRange lo hi rs
     return . sort $ r : rs
 
+interleave :: [a] -> [a] -> [a]
+interleave [] ys = ys
+interleave xs [] = xs
+interleave (x:xs) (y:ys) = x : y : interleave xs ys
+
+rationalApproxs :: Double -> Double -> [Rational]
+rationalApproxs lower upper = go (floor lower) (ceil upper)
+    where
+    go l u | u <= lower = []
+           | l >= upper = []
+           | mediant : interleave (go l mediant) (go mediant u)
+        where
+        mediant = (numerator a + numerator b) / (denominator a + denominator b)
 
 type D = Cs.D
 
