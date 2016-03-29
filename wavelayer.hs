@@ -156,4 +156,4 @@ play = Cs.dac . playChords
 
 cheapest = head . WS.flattenHeap
 
-main = play . cheapest . harmonizeIntoLine $ myLine
+main = play $ (map.map) (220*) chords
