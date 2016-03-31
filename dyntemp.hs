@@ -2,7 +2,10 @@ import Data.Ratio
 import Data.List (maximumBy, minimumBy)
 import Data.Ord (comparing)
 import Control.Applicative
+import Control.Monad.Trans.State
+import Control.Monad.Trans
 import qualified System.MIDI as MIDI
+import qualified Data.Sequence as Seq
 
 mergeOn :: (Ord b) => (a -> b) -> [a] -> [a] -> [a]
 mergeOn _ [] ys = ys
@@ -23,11 +26,6 @@ rationalApproxs lower upper = go (floor lower % 1) (ceiling upper % 1)
         inRange x = lower < realToFrac x && realToFrac x < upper
 
 
-
-type MIDINote = Int
-
-equalTempPitch :: MIDINote -> Double
-equalTempPitch n = 440 * 2 ** (fromIntegral (n - 69) / 12)
 
 -- Takes a list of ratios already present, and a number of half-steps from 1, and calculates
 -- the most consonant ratio.
@@ -50,15 +48,43 @@ leftBiasedMinimumOn measure (x:xs) = go x (measure x) xs
         where
         m = measure x
 
-calcChord :: [Int] -> [Rational]
-calcChord = go []
-    where
-    go accum [] = []
-    go accum (n:ns) = let p = calcPitch accum n in p : go (p:accum) ns
 
-ratios :: [Rational] -> [Rational]
-ratios [] = []
-ratios (p:ps) = 1 : map (/p) ps
+data PlayingNote = PlayingNote {
+    pnMidiNote :: Int,
+    pnChannel  :: Int,
+    pnRatio    :: Rational  -- relative to A440 (TODO: different keys)
+}
+
+data PlayState = PlayState {
+    psConnection :: MIDI.Connection,
+    psPlayingNotes :: [PlayingNote],
+    psFreeChannels :: Seq.Seq Int
+}
+
+
+noteOn :: Rational -> Int -> StateT PlayState IO ()
+noteOn pitch vel = do
+    let note = 12 * logBase 2 (realToFrac pitch) + 69
+    let midiNote = round note
+    let pitchBend = round (8191 * (note - fromIntegral midiNote))
+    state <- get
+    let channel Seq.:< channels = Seq.viewl (psFreeChannels state) -- TODO handle no free channels
+    
+    liftIO $ MIDI.send (psConnection state) $ MIDI.MidiMessage channel (MIDI.NoteOn midiNote vel)
+    liftIO $ MIDI.send (psConnection state) $ MIDI.MidiMessage channel (MIDI.PitchWheel pitchBend)
+
+    let playingNote = PlayingNote {
+            pnMidiNote = midiNote,
+            pnChannel = channel,
+            pnRatio = pitch }
+
+    put $ PlayState {
+        psConnection = psConnection state,
+        psPlayingNotes = playingNote : psPlayingNotes state,
+        psFreeChannels = channels
+    }
+    
+
 
 main = do
     sources <- MIDI.enumerateSources
