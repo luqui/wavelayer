@@ -4,7 +4,7 @@ import Data.Ratio
 import Data.List (maximumBy, minimumBy)
 import Data.Ord (comparing)
 import Data.List (partition)
-import Control.Monad (forM_)
+import Control.Monad (forM)
 import Control.Applicative
 import Control.Monad.Trans.State
 import Control.Monad.Trans
@@ -96,10 +96,12 @@ noteOff :: Rational -> StateT PlayState IO ()
 noteOff pitch = do
     state <- get
     let (off,remain) = partition ((== pitch) . pnRatio) (psPlayingNotes state)
-    forM_ off $ \pn ->
+    channels <- forM off $ \pn -> do
         liftIO $ MIDI.send (psConnection state) $
             MIDI.MidiMessage (pnChannel pn) (MIDI.NoteOn (pnMidiNote pn) 0)
-    put $ state { psPlayingNotes = remain }
+        return (pnChannel pn)
+    put $ state { psPlayingNotes = remain,
+                  psFreeChannels = psFreeChannels state Seq.>< Seq.fromList channels }
 
 noteOnKey :: Int -> Int -> StateT PlayState IO ()
 noteOnKey note vel = do
@@ -112,10 +114,12 @@ noteOffKey :: Int -> StateT PlayState IO ()
 noteOffKey note = do
     state <- get
     let (off,remain) = partition ((== note) . pnMidiNote) (psPlayingNotes state)
-    forM_ off $ \pn ->
+    channels <- forM off $ \pn -> do
         liftIO $ MIDI.send (psConnection state) $
             MIDI.MidiMessage (pnChannel pn) (MIDI.NoteOn (pnMidiNote pn) 0)
-    put $ state { psPlayingNotes = remain }
+        return (pnChannel pn)
+    put $ state { psPlayingNotes = remain,
+                  psFreeChannels = psFreeChannels state Seq.>< Seq.fromList channels }
     
     
 
