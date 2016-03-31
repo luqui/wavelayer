@@ -22,25 +22,43 @@ rationalApproxs lower upper = go (floor lower % 1) (ceiling upper % 1)
         mediant = (numerator l + numerator u) % (denominator l + denominator u)
         inRange x = lower < realToFrac x && realToFrac x < upper
 
+
+
 type MIDINote = Int
 
 equalTempPitch :: MIDINote -> Double
 equalTempPitch n = 440 * 2 ** (fromIntegral (n - 69) / 12)
 
-calcPitch :: [Rational] -> MIDINote -> Rational
-calcPitch [] n = realToFrac (equalTempPitch n)  -- should incorporate history
-calcPitch (root:rest) n = minimumBy (comparing measure) (take 100 candidates)
+-- Takes a list of ratios already present, and a number of half-steps from 1, and calculates
+-- the most consonant ratio.
+calcPitch :: [Rational] -> Int -> Rational
+calcPitch accum n = leftBiasedMinimumOn measure (take 30 candidates)
     where
-    pitch = equalTempPitch n
-    measure p = maximum (1 : [ numerator (p/q) + denominator (p/q) | q <- rest ])
-    candidates = map (root*) $ rationalApproxs (pitch / delta / realToFrac root) (pitch * delta / realToFrac root)
+    pitch = 2 ** (fromIntegral n / 12)
+    measure p = maximum (0 : [ numerator (p/q) + denominator (p/q) | q <- accum ])
+    candidates = rationalApproxs (pitch / delta) (pitch * delta)
     delta = 2**(1/24)
 
-calcChord :: [MIDINote] -> [Rational]
+leftBiasedMinimumOn :: (Ord b) => (a -> b) -> [a] -> a
+leftBiasedMinimumOn measure [] = error "leftBiasedMinimumOn: empty list"
+leftBiasedMinimumOn measure (x:xs) = go x (measure x) xs
+    where
+    go best bestm [] = best
+    go best bestm (x:xs)
+        | m < bestm = go x m xs
+        | otherwise = go best bestm xs
+        where
+        m = measure x
+
+calcChord :: [Int] -> [Rational]
 calcChord = go []
     where
     go accum [] = []
     go accum (n:ns) = let p = calcPitch accum n in p : go (p:accum) ns
+
+ratios :: [Rational] -> [Rational]
+ratios [] = []
+ratios (p:ps) = 1 : map (/p) ps
 
 main = do
     sources <- MIDI.enumerateSources
