@@ -1,6 +1,10 @@
+{-# LANGUAGE TypeSynonymInstances #-}
+
 import Data.Ratio
 import Data.List (maximumBy, minimumBy)
 import Data.Ord (comparing)
+import Data.List (partition)
+import Control.Monad (forM_)
 import Control.Applicative
 import Control.Monad.Trans.State
 import Control.Monad.Trans
@@ -54,12 +58,17 @@ data PlayingNote = PlayingNote {
     pnChannel  :: Int,
     pnRatio    :: Rational  -- relative to A440 (TODO: different keys)
 }
+    deriving (Show)
 
 data PlayState = PlayState {
     psConnection :: MIDI.Connection,
     psPlayingNotes :: [PlayingNote],
     psFreeChannels :: Seq.Seq Int
 }
+    deriving (Show)
+
+instance Show MIDI.Connection where
+    show _ = "<MIDI.Connection>"
 
 
 noteOn :: Rational -> Int -> StateT PlayState IO ()
@@ -78,14 +87,46 @@ noteOn pitch vel = do
             pnChannel = channel,
             pnRatio = pitch }
 
-    put $ PlayState {
-        psConnection = psConnection state,
+    put $ state {
         psPlayingNotes = playingNote : psPlayingNotes state,
         psFreeChannels = channels
     }
+
+noteOff :: Rational -> StateT PlayState IO ()
+noteOff pitch = do
+    state <- get
+    let (off,remain) = partition ((== pitch) . pnRatio) (psPlayingNotes state)
+    forM_ off $ \pn ->
+        liftIO $ MIDI.send (psConnection state) $
+            MIDI.MidiMessage (pnChannel pn) (MIDI.NoteOn (pnMidiNote pn) 0)
+    put $ state { psPlayingNotes = remain }
+
+noteOnKey :: Int -> Int -> StateT PlayState IO ()
+noteOnKey note vel = do
+    state <- get
+    let ratios = map pnRatio (psPlayingNotes state)
+    let newRatio = calcPitch ratios (note-69)
+    noteOn newRatio vel
+
+noteOffKey :: Int -> StateT PlayState IO ()
+noteOffKey note = do
+    state <- get
+    let (off,remain) = partition ((== note) . pnMidiNote) (psPlayingNotes state)
+    forM_ off $ \pn ->
+        liftIO $ MIDI.send (psConnection state) $
+            MIDI.MidiMessage (pnChannel pn) (MIDI.NoteOn (pnMidiNote pn) 0)
+    put $ state { psPlayingNotes = remain }
+    
     
 
+connect :: IO PlayState
+connect = do
+    destination:_ <- MIDI.enumerateDestinations
+    conn <- MIDI.openDestination destination
+    putStrLn . ("Connected to " ++) =<< MIDI.getName destination
+    return $ PlayState {
+        psConnection = conn,
+        psPlayingNotes = [],
+        psFreeChannels = Seq.fromList [1..8]
+    }
 
-main = do
-    sources <- MIDI.enumerateSources
-    print =<< mapM MIDI.getName sources
