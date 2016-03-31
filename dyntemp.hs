@@ -4,10 +4,11 @@ import Data.Ratio
 import Data.List (maximumBy, minimumBy)
 import Data.Ord (comparing)
 import Data.List (partition)
-import Control.Monad (forM)
+import Control.Monad (forM, filterM, forever)
 import Control.Applicative
 import Control.Monad.Trans.State
 import Control.Monad.Trans
+import Control.Concurrent (threadDelay)
 import qualified System.MIDI as MIDI
 import qualified Data.Sequence as Seq
 
@@ -108,6 +109,7 @@ noteOnKey note vel = do
     state <- get
     let ratios = map pnRatio (psPlayingNotes state)
     let newRatio = calcPitch ratios (note-69)
+    liftIO $ print newRatio
     noteOn newRatio vel
 
 noteOffKey :: Int -> StateT PlayState IO ()
@@ -123,14 +125,41 @@ noteOffKey note = do
     
     
 
-connect :: IO PlayState
-connect = do
-    destination:_ <- MIDI.enumerateDestinations
+connectOutput :: String -> IO PlayState
+connectOutput destName = do
+    destinations <- MIDI.enumerateDestinations
+    [destination] <- filterM (\d -> (destName ==) <$> MIDI.getName d) destinations
     conn <- MIDI.openDestination destination
-    putStrLn . ("Connected to " ++) =<< MIDI.getName destination
+    putStrLn . ("Connected to destintion " ++) =<< MIDI.getName destination
     return $ PlayState {
         psConnection = conn,
         psPlayingNotes = [],
         psFreeChannels = Seq.fromList [1..8]
     }
 
+connectInput :: String -> IO MIDI.Connection
+connectInput sourceName = do
+    sources <- MIDI.enumerateSources
+    validSources <- filterM (\s -> (sourceName ==) <$> MIDI.getName s) sources
+    putStrLn $ "There are " ++ show (length validSources) ++ " valid sources"
+    let [source] = validSources
+    conn <- MIDI.openSource source Nothing
+    putStrLn . ("Connected to source " ++) =<< MIDI.getName source
+    return conn
+
+main :: IO ()
+main = do
+    state <- connectOutput "IAC Bus 1"
+    source <- connectInput "UM-ONE"
+    MIDI.start source
+    (`evalStateT` state) . forever $ do
+        liftIO $ threadDelay 1000  -- 1 millisec
+        events <- liftIO (MIDI.getEvents source)
+        mapM_ procEvent events
+
+procEvent :: MIDI.MidiEvent -> StateT PlayState IO ()
+procEvent (MIDI.MidiEvent _ (MIDI.MidiMessage _ msg)) = go msg
+    where
+    go (MIDI.NoteOn key vel) = noteOnKey key vel
+    go (MIDI.NoteOff key _) = noteOffKey key
+    go _ = return ()
