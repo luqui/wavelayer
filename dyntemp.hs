@@ -91,7 +91,7 @@ perturb :: Double -> [Double] -> Rand [Double]
 perturb delta = mapM (\x -> (x *) . (2 **) <$> Rand.getRandomR (-delta, delta))
 
 _SPIKEYNESS = 10
-_DELTA = 0.05
+_DELTA = 1/24
 
 reduce1 :: Double -> [Double] -> Rand [Double]
 reduce1 delta xs = do
@@ -101,20 +101,28 @@ reduce1 delta xs = do
 reduceN :: Double -> Int -> [Double] -> Rand [Double]
 reduceN delta n = foldr (>=>) return (replicate n (reduce1 delta))
 
+inNoteRange :: Int -> Double -> Bool
+inNoteRange key pitch = mid * 2**(-1/24) <= pitch && pitch <= mid * 2**(1/24)
+    where
+    mid = 2**((fromIntegral key - 69)/12)
+
 repitchState :: ([Double] -> [Double]) -> StateT PlayState IO ()
 repitchState pf = do
     state <- get
     let notes = sortBy (comparing (Down . pnPitch)) (psPlayingNotes state)
-    newNotes <- forM (zip notes (pf (map pnPitch notes))) $ \(note, newpitch) -> do
-        let note' = note { pnPitch = newpitch }
-        when (newpitch /= pnPitch note) $ sendPitch note'
-        return note'
-    put (state { psPlayingNotes = newNotes })
+    let modnotes = pf (map pnPitch notes)
+    let inRanges = any (\(note,mod) -> inNoteRange (pnMidiNote note) mod) (zip notes modnotes)
+    when inRanges $ do
+        newNotes <- forM (zip notes (pf (map pnPitch notes))) $ \(note, newpitch) -> do
+            let note' = note { pnPitch = newpitch }
+            when (newpitch /= pnPitch note) $ sendPitch note'
+            return note'
+        put (state { psPlayingNotes = newNotes })
 
-reduceStateN :: Int -> StateT PlayState IO ()
-reduceStateN n = do
+reduceState :: StateT PlayState IO ()
+reduceState = do
     gen <- lift Rand.newStdGen
-    repitchState (\ps -> Rand.evalRand (reduceN _DELTA n ps) gen)
+    repitchState (\ps -> Rand.evalRand (reduce1 _DELTA ps) gen)
         
 sendPitch :: PlayingNote -> StateT PlayState IO ()
 sendPitch pn = do
@@ -191,7 +199,7 @@ main = do
         liftIO $ threadDelay 1000  -- 1 millisec
         events <- liftIO (MIDI.getEvents source)
         mapM_ procEvent events
-        reduceStateN 1
+        reduceState
 
 procEvent :: MIDI.MidiEvent -> StateT PlayState IO ()
 procEvent (MIDI.MidiEvent _ (MIDI.MidiMessage _ msg)) = go msg
