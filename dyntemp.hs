@@ -4,7 +4,8 @@ import Data.Ratio
 import Data.List (maximumBy, minimumBy)
 import Data.Ord (comparing, Down(..))
 import Data.List (partition, tails, sortBy)
-import Control.Monad (forM, filterM, forever, (>=>), when)
+import Data.Maybe (fromMaybe)
+import Control.Monad (forM, forM_, filterM, forever, (>=>), when, replicateM_)
 import Control.Applicative
 import Control.Monad.Trans.State
 import Control.Monad.Trans
@@ -12,6 +13,7 @@ import Control.Concurrent (threadDelay)
 import qualified System.MIDI as MIDI
 import qualified Data.Sequence as Seq
 import qualified Control.Monad.Random as Rand
+import qualified Data.Map as Map
 
 mergeOn :: (Ord b) => (a -> b) -> [a] -> [a] -> [a]
 mergeOn _ [] ys = ys
@@ -65,7 +67,8 @@ data PlayingNote = PlayingNote {
 data PlayState = PlayState {
     psConnection :: MIDI.Connection,
     psPlayingNotes :: [PlayingNote],
-    psFreeChannels :: Seq.Seq Int
+    psFreeChannels :: Seq.Seq Int,
+    psNoteMemory :: Map.Map Int Double
 }
     deriving (Show)
 
@@ -87,10 +90,20 @@ energy spikeyness notes = (spikeyness *) . sum $ do
     
 type Rand = Rand.Rand Rand.StdGen
 
-perturb :: Double -> [Double] -> Rand [Double]
-perturb delta = mapM (\x -> (x *) . (2 **) <$> Rand.getRandomR (-delta, delta))
+replaceTail :: [a] -> [a] -> [a]
+replaceTail [] _ = []
+replaceTail [x] (y:_) = [x]
+replaceTail (_:xs) (y:ys) = y : replaceTail xs ys
 
-_SPIKEYNESS = 10
+perturb :: Double -> [Double] -> Rand [Double]
+perturb delta ps = do
+    new <- mapM (\x -> (x *) . (2 **) <$> Rand.getRandomR (-delta, delta)) ps
+    -- fix the bottom pitch, so we don't wander all over the damn place
+    -- return $ replaceTail ps new
+    
+    return new
+
+_SPIKEYNESS = 100
 _DELTA = 1/24
 
 reduce1 :: Double -> [Double] -> Rand [Double]
@@ -108,16 +121,17 @@ inNoteRange key pitch = mid * 2**(-1/24) <= pitch && pitch <= mid * 2**(1/24)
 
 repitchState :: ([Double] -> [Double]) -> StateT PlayState IO ()
 repitchState pf = do
-    state <- get
-    let notes = sortBy (comparing (Down . pnPitch)) (psPlayingNotes state)
+    notes <- gets (sortBy (comparing (Down . pnPitch)) . psPlayingNotes)
+    modify (\s -> s { psPlayingNotes = notes })
     let modnotes = pf (map pnPitch notes)
     let inRanges = any (\(note,mod) -> inNoteRange (pnMidiNote note) mod) (zip notes modnotes)
     when inRanges $ do
-        newNotes <- forM (zip notes (pf (map pnPitch notes))) $ \(note, newpitch) -> do
+        newNotes <- forM (zip notes modnotes) $ \(note, newpitch) -> do
             let note' = note { pnPitch = newpitch }
             when (newpitch /= pnPitch note) $ sendPitch note'
             return note'
-        put (state { psPlayingNotes = newNotes })
+        
+        modify (\s -> s { psPlayingNotes = newNotes })
 
 reduceState :: StateT PlayState IO ()
 reduceState = do
@@ -129,31 +143,36 @@ sendPitch pn = do
     state <- get
     let note = 12 * logBase 2 (pnPitch pn) + 69
     let pitchBend = round (8191 * (note - fromIntegral (pnMidiNote pn)))
+    put (state { psNoteMemory = Map.insert (pnMidiNote pn) (pnPitch pn) (psNoteMemory state) })
     liftIO $ MIDI.send (psConnection state) $ 
         MIDI.MidiMessage (pnChannel pn) (MIDI.PitchWheel pitchBend)
 
-noteOn :: Double -> Int -> StateT PlayState IO ()
-noteOn pitch vel = do
-    let note = 12 * logBase 2 pitch + 69
-    let midiNote = round note
+noteOn :: Int -> Double -> Int -> StateT PlayState IO ()
+noteOn key pitch vel = do
     state <- get
-    let channel Seq.:< channels = Seq.viewl (psFreeChannels state) -- TODO handle no free channels
-    
-    let playingNote = PlayingNote {
-            pnMidiNote = midiNote,
-            pnChannel = channel,
-            pnPitch = pitch }
+    case Seq.viewl (psFreeChannels state) of
+        Seq.EmptyL -> return ()
+        channel Seq.:< channels -> do
+            let playingNote = PlayingNote {
+                    pnMidiNote = key,
+                    pnChannel = channel,
+                    pnPitch = pitch }
 
-    liftIO $ MIDI.send (psConnection state) $ MIDI.MidiMessage channel (MIDI.NoteOn midiNote vel)
-    sendPitch playingNote
+            liftIO $ MIDI.send (psConnection state) $ MIDI.MidiMessage channel (MIDI.NoteOn key vel)
+            sendPitch playingNote
 
-    put $ state {
-        psPlayingNotes = playingNote : psPlayingNotes state,
-        psFreeChannels = channels
-    }
+            put $ state {
+                psPlayingNotes = playingNote : psPlayingNotes state,
+                psFreeChannels = channels
+            }
 
 noteOnKey :: Int -> Int -> StateT PlayState IO ()
-noteOnKey key vel = noteOn (2**((fromIntegral key - 69)/12)) vel
+noteOnKey key vel = do
+    state <- get
+    let pitch = maybe eqPitch id (Map.lookup key (psNoteMemory state))
+    noteOn key pitch vel
+    where
+    eqPitch = 2**((fromIntegral key - 69)/12)
 
 noteOffKey :: Int -> StateT PlayState IO ()
 noteOffKey note = do
@@ -177,7 +196,8 @@ connectOutput destName = do
     return $ PlayState {
         psConnection = conn,
         psPlayingNotes = [],
-        psFreeChannels = Seq.fromList [1..8]
+        psFreeChannels = Seq.fromList [1..8],
+        psNoteMemory = Map.empty
     }
 
 connectInput :: String -> IO MIDI.Connection
@@ -199,11 +219,16 @@ main = do
         liftIO $ threadDelay 1000  -- 1 millisec
         events <- liftIO (MIDI.getEvents source)
         mapM_ procEvent events
-        reduceState
+        replicateM_ 10 reduceState
 
 procEvent :: MIDI.MidiEvent -> StateT PlayState IO ()
 procEvent (MIDI.MidiEvent _ (MIDI.MidiMessage _ msg)) = go msg
     where
     go (MIDI.NoteOn key vel) = noteOnKey key vel
     go (MIDI.NoteOff key _) = noteOffKey key
+    -- multiplex sustain pedal
+    go (MIDI.CC controller@64 value) = do
+        state <- get
+        forM_ [1..8] $ \ch -> do
+            liftIO $ MIDI.send (psConnection state) (MIDI.MidiMessage ch (MIDI.CC controller value))
     go _ = return ()
